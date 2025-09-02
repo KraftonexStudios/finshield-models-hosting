@@ -42,8 +42,7 @@ models:
   # Typing/keystroke encoder
   typing_encoder:
     model_path: "models/typing_encoder/model.pth"
-    vocab_path: "models/typing_encoder/vocab.json"
-    scaler_path: "models/typing_encoder/scaler.pkl"
+    metadata_path: "models/typing_encoder/metadata.pkl"
     config_path: "models/typing_encoder/config.yaml"
     enabled: true
 

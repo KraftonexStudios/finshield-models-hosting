@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 import torch
 import numpy as np
@@ -10,6 +11,65 @@ import pickle
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# Add encoder paths to sys.path for imports
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'motion-encoder'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'touch-encoder'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'typing-encoder'))
+
+# Import actual encoder classes
+try:
+    from inference import IMUMotionEncoder
+except ImportError:
+    logger.warning("Could not import IMUMotionEncoder")
+    IMUMotionEncoder = None
+
+try:
+    from gesture_inference import GestureInference
+except ImportError:
+    logger.warning("Could not import GestureInference")
+    GestureInference = None
+
+# Import typing encoder with completely isolated environment
+import importlib.util
+
+# Save current sys.path and modules
+original_path = sys.path.copy()
+original_modules = {k: v for k, v in sys.modules.items() if k in ['model', 'config', 'data_processor']}
+
+try:
+    # Remove conflicting modules from sys.modules
+    modules_to_remove = [k for k in sys.modules.keys() if k in ['model', 'config', 'data_processor']]
+    for module_name in modules_to_remove:
+        if module_name in sys.modules:
+            del sys.modules[module_name]
+    
+    # Create a clean path that only includes typing encoder
+    typing_encoder_path = os.path.join(os.path.dirname(__file__), '..', 'typing-encoder')
+    typing_encoder_path = os.path.abspath(typing_encoder_path)
+    
+    # Set up completely isolated sys.path
+    sys.path = [typing_encoder_path]
+    
+    # Import typing encoder modules
+    spec = importlib.util.spec_from_file_location(
+        "typing_inference", 
+        os.path.join(typing_encoder_path, "inference.py")
+    )
+    typing_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(typing_module)
+    KeystrokeEncoder = typing_module.KeystrokeEncoder
+    
+    logger.info("Successfully imported KeystrokeEncoder")
+except Exception as e:
+    logger.warning(f"Could not import KeystrokeEncoder: {e}")
+    KeystrokeEncoder = None
+finally:
+    # Restore original sys.path
+    sys.path = original_path
+    # Restore original modules
+    for module_name, module_obj in original_modules.items():
+        sys.modules[module_name] = module_obj
 
 class ModelNotLoadedException(Exception):
     """Exception raised when trying to use a model that hasn't been loaded"""
@@ -71,12 +131,14 @@ class EncoderService:
             return
         
         try:
-            # Placeholder implementation - will be replaced with actual model loading
-            # from motion_encoder.inference import IMUMotionEncoder
-            # self.models['motion_encoder'] = IMUMotionEncoder(model_path, processor_path, device)
+            if IMUMotionEncoder is not None:
+                # Load the actual model
+                self.models['motion_encoder'] = IMUMotionEncoder(model_path, processor_path, device)
+                logger.info(f"Successfully loaded real motion encoder from {model_path}")
+            else:
+                logger.warning("IMUMotionEncoder class not available, using placeholder")
+                self.models['motion_encoder'] = MotionEncoderPlaceholder(model_path, processor_path, device)
             
-            # For now, create a placeholder
-            self.models['motion_encoder'] = MotionEncoderPlaceholder(model_path, processor_path, device)
             self.model_info['motion_encoder'] = {
                 'type': 'IMU Motion Encoder',
                 'input_features': 11,
@@ -84,7 +146,8 @@ class EncoderService:
                 'model_path': model_path,
                 'processor_path': processor_path,
                 'device': device,
-                'loaded_at': datetime.now().isoformat()
+                'loaded_at': datetime.now().isoformat(),
+                'is_real_model': IMUMotionEncoder is not None
             }
             
         except Exception as e:
@@ -101,19 +164,22 @@ class EncoderService:
             return
         
         try:
-            # Placeholder implementation - will be replaced with actual model loading
-            # from touch_encoder.gesture_inference import GestureInference
-            # self.models['touch_encoder'] = GestureInference(model_path, device)
+            if GestureInference is not None:
+                # Load the actual model
+                self.models['touch_encoder'] = GestureInference(model_path)
+                logger.info(f"Successfully loaded real touch encoder from {model_path}")
+            else:
+                logger.warning("GestureInference class not available, using placeholder")
+                self.models['touch_encoder'] = TouchEncoderPlaceholder(model_path, device)
             
-            # For now, create a placeholder
-            self.models['touch_encoder'] = TouchEncoderPlaceholder(model_path, device)
             self.model_info['touch_encoder'] = {
                 'type': 'Touch/Gesture Encoder',
                 'input_features': 7,
                 'output_dim': 256,
                 'model_path': model_path,
                 'device': device,
-                'loaded_at': datetime.now().isoformat()
+                'loaded_at': datetime.now().isoformat(),
+                'is_real_model': GestureInference is not None
             }
             
         except Exception as e:
@@ -132,12 +198,14 @@ class EncoderService:
             return
         
         try:
-            # Placeholder implementation - will be replaced with actual model loading
-            # from typing_encoder.inference import KeystrokeEncoder
-            # self.models['typing_encoder'] = KeystrokeEncoder(model_path, metadata_path, config_path, device)
+            if KeystrokeEncoder is not None:
+                # Load the actual model
+                self.models['typing_encoder'] = KeystrokeEncoder(model_path, metadata_path, config_path)
+                logger.info(f"Successfully loaded real typing encoder from {model_path}")
+            else:
+                logger.warning("KeystrokeEncoder class not available, using placeholder")
+                self.models['typing_encoder'] = TypingEncoderPlaceholder(model_path, metadata_path, config_path, device)
             
-            # For now, create a placeholder
-            self.models['typing_encoder'] = TypingEncoderPlaceholder(model_path, metadata_path, config_path, device)
             self.model_info['typing_encoder'] = {
                 'type': 'Keystroke Dynamics Encoder',
                 'input_features': 'variable (character + 4 numerical)',
@@ -146,7 +214,8 @@ class EncoderService:
                 'metadata_path': metadata_path,
                 'config_path': config_path,
                 'device': device,
-                'loaded_at': datetime.now().isoformat()
+                'loaded_at': datetime.now().isoformat(),
+                'is_real_model': KeystrokeEncoder is not None
             }
             
         except Exception as e:
